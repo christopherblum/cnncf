@@ -1,5 +1,5 @@
 # cnncf
-Convolutional Neural network with circular filters for sequence motif inference.
+Convolutional Neural network with circular filters for sequence motif inference ([bioRxiv preprint](https://doi.org/10.1101/312959))
 
 
 ## Description
