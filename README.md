@@ -21,10 +21,10 @@ TensorFlow >=3.6
 
 ## Usage:
 
-python cnncf.py
+`python cnncf.py`
 
 ## Default options:
-
+`
 --motif='ACGTAC'
 
 --filter_length=6
@@ -44,5 +44,6 @@ python cnncf.py
 --num_negative=10000
 
 --batch_size=100
+`
 
 --regul=0.01
