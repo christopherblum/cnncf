@@ -15,7 +15,7 @@ The models are trained for `training_steps` training steps at a learning rate of
 
 Numpy >= 1.14.2
 
-TensorFlow >=3.6
+TensorFlow >=1.6
 
 
 ## Usage:
