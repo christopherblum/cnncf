@@ -2,11 +2,10 @@
 Convolutional Neural network with circular filters for sequence motif inference.
 
 
-# Convolutional Neural network with circular filters for sequence motif inference.
-
 ## Description
 
 This python script demonstrates how circular filters can be applied to sequence motif inference with convolutional neural networks.
+
 First, a data set of `num_positive` positive and `num_negative` negative training sequences is created, each sequence of length `sequence_length`. The positive training sequences all contain a motif `motif` placed at a random position in a random sequence background. Negative sequences are created by randomly shuffling the nucleotide order of all positive training sequences. Motifs can only contain letters A, C, G or T (upper-case).
 
 Two models are trained: a CNN with circular filters and a regular CNN. Both use filters of length `filter_length`.
