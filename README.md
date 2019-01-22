@@ -32,7 +32,7 @@ TensorFlow >=1.6
 
 --sequence_length=40
 
---training_steps=3000
+--training_steps=2000
 
 --display_steps=500
 
@@ -40,9 +40,9 @@ TensorFlow >=1.6
 
 --num_positive=100
 
---num_negative=10000
+--num_negative=1000
 
---batch_size=100
+--batch_size=20
 
 --regul=0.01
 ```

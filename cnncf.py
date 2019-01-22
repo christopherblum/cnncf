@@ -1,11 +1,45 @@
+"""
+MIT License
+
+Copyright (c) 2018 christopherblum
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
+
+# ------------------------------------------------------
+# Imports
+# ------------------------------------------------------
+
+alphabet = list('ACGT')
+
 import numpy as np
-import tensorflow as tf
+import random
 import time
 import os
+import tensorflow as tf
 
 
-transfer_function = tf.nn.relu # activation function applied to the sequence convolutions
-alphabet = list('ACGT')        # the only valid sequence symbols (case-sensitive!)
+# ------------------------------------------------------
+# Flags
+# ------------------------------------------------------
+
 
 flags = tf.app.flags
 FLAGS = flags.FLAGS
@@ -22,7 +56,7 @@ flags.DEFINE_float('learning_rate', 0.1,
 flags.DEFINE_integer('sequence_length', 40,
                      'Length of training sequences. Must be longer than motif.')
 
-flags.DEFINE_integer('training_steps', 3000,
+flags.DEFINE_integer('training_steps', 2000,
                      'Number of training steps.')
 
 flags.DEFINE_integer('display_steps', 500,
@@ -34,10 +68,10 @@ flags.DEFINE_string('gpus', '',
 flags.DEFINE_integer('num_positive', 100,
                      'Number of positive training examples.')
 
-flags.DEFINE_integer('num_negative', 10000,
+flags.DEFINE_integer('num_negative', 1000,
                      'Number of negative training examples.')
 
-flags.DEFINE_integer('batch_size', 100,
+flags.DEFINE_integer('batch_size', 20,
                      'Batch size. Half of the batch are positive examples, the other half are negative examples.')
 
 flags.DEFINE_float('regul', 0.01, 'L2 regularization strength.')
@@ -58,106 +92,116 @@ def check_args(flags):
     if flags.filter_length == -1:
         flags.filter_length = len(flags.motif)
 
-
 check_args(FLAGS)
-os.environ["CUDA_DEVICE_ORDER"]    = "PCI_BUS_ID"
+
+
+
+os.environ["CUDA_DEVICE_ORDER"]    = 'PCI_BUS_ID'
 os.environ["CUDA_VISIBLE_DEVICES"] = FLAGS.gpus
 
 
-
 # ------------------------------------------------------
-# Converts a string 'ACGT' into one-hot coding
+# Functions for generating data
 # ------------------------------------------------------
 
-def get_motif_from_string(motif):
+nuc2ind_dict = {'A': [1,0,0,0],
+                'C': [0,1,0,0],
+                'G': [0,0,1,0],
+                'T': [0,0,0,1]}
+
+def nuc2ind(letter):
+    if letter not in alphabet:
+        return nuc2ind_dict[np.random.choice(alphabet)] # if there's an "N": randomly pick either A/C/G/T ...
+    else:
+        return nuc2ind_dict[letter]
+
+
+
+def shuffle_elements(mylist):
+    combined = list(zip(*mylist))
+    random.shuffle(combined)
+    return [np.array(a) for a in zip(*combined)]
+
+
+
+def convert_to_onehot(seq):
+    return np.concatenate([mydict[nuc] for nuc in seq], axis=0)
+
+
+
+def create_tf_examples(seq_pos, seq_neg, do_shuffle):
     
-    onehot_dict = dict(zip(list('ACGT'),np.arange(4)))
+    seq_len  = len(seq_pos[0])
+    Np       = len(seq_pos)
+    Nn       = len(seq_neg)
     
-    v = np.array([onehot_dict[key] for key in motif]).reshape([-1,1])
-    h = np.arange(4).reshape([1,-1])
+    examples = seq_pos + seq_neg  
+    labels   = [1 for _ in range(Np)] + [0 for _ in range(Nn)]
+    
+    examples = np.array([[nuc2ind(letter) for letter in sequence] for sequence in examples]).reshape([Np+Nn,1,seq_len,4])
+    labels   = np.array(labels)
+    
+    if do_shuffle:
+        examples, labels = shuffle_elements([examples, labels])    
+                                     
+    examples = tf.convert_to_tensor(examples, dtype=tf.float32)
+    labels   = tf.convert_to_tensor(labels,     dtype=tf.int32)   
+                     
+    return examples, labels 
 
-    return np.equal(v,h)*1
 
 
-
-
-
-# ------------------------------------------------------
-# Function for generating data. 
-# It places a specified motif at a random position in 
-# each positive training sequence. Then, it randomly 
-# shuffles the nucleotide order of each positive 
-# sequence to generate negative training examples.
-# ------------------------------------------------------
+def shuffle_sequences(sequences):
+    idx = np.arange(len(sequences[0]))
+    sequences_shuffled = []
+    for seq in sequences:
+        np.random.shuffle(idx)
+        sequences_shuffled.append(''.join([seq[i] for i in idx]))
+    return sequences_shuffled
+    
 
 
 def generate_data(num_pos, num_neg, seq_len, motif):
     
-    motif_len = len(motif)
-    pos_data = (np.random.randint(0,4,[num_pos, 1,seq_len, 1]) == np.reshape(np.arange(4),[1,1,1,4]))*1.0 # background data
+    motif = np.array(list(motif))
+    motif_len  = len(motif)
+
+    
+    ### create positive sequences
+    seq_pos  = []
     for s in range(num_pos):
-        q = np.random.randint(seq_len-motif_len+1)
-        pos_data[s,0,q:q+motif_len,:] = get_motif_from_string(motif)
+        base_seq = np.random.choice(alphabet, seq_len)
+        q = np.random.randint(0,seq_len-motif_len+1) # draw random position in sequence
+        base_seq[q:q+motif_len] = motif # place motif at random position in sequence
+        seq_pos.append(base_seq) # convert string to one-hot "image"
 
-    neg_data = pos_data[np.random.randint(0, num_pos, num_neg),:,:] # randomly sample from positive data
-    idx = np.arange(seq_len)
-    for b in range(num_neg):           
-        np.random.shuffle(idx)
-        seq = neg_data[b,:,:,:]
-        neg_data[b,:,:,:] = seq[:,idx,:]   
         
-       
+        
+    ### create negative sequences
+    seq_neg = shuffle_sequences([seq_pos[i] for i in np.random.randint(0, len(seq_pos), num_neg)]) 
     
-    multiplier = num_neg // num_pos
     
-    pos_data = np.concatenate([pos_data]*multiplier)
-
-    if len(pos_data) != len(neg_data):
-        raise('number of positive examples is not the same as the number of negative examples.')
-
-    return pos_data, neg_data   
-
-
-
-
-
-# ------------------------------------------------------
-# Data set class. Contains the data as well as a method 
-# for generating examples batches for training.
-# TODO: replace with tf.dataset
-# ------------------------------------------------------
-
-
-class mydata(object):
     
-    def __init__(self, num_pos_train, num_neg_train, seq_len, motif):
+    ### for mini-batch training, we can get asymptotically balanced batches if we now make sure that there are
+    ### as many positive examples as negative examples -> copy
+    if num_neg>num_pos:
+        # we need more positive sequences ...
+        seq_pos = seq_pos*(num_neg//num_pos)
+        seq_pos = [seq_pos[i] for i in np.random.randint(0, len(seq_pos), num_neg)]
+    if num_neg<num_pos:
+        # we need more negative sequences ...
+        seq_neg = seq_neg*(num_pos//num_neg)
+        seq_neg = [seq_neg[i] for i in np.random.randint(0, len(seq_neg), num_pos)]
         
-        self.motif_len = len(motif)
-        [pos_data_train, neg_data_train] = generate_data(num_pos_train, num_neg_train, seq_len, motif)
-
-        self.pos_data_train = pos_data_train
-        self.neg_data_train = neg_data_train
-
-        self.num_pos_train  = num_pos_train
-        self.num_neg_train  = num_neg_train
-        self.train_idx      = 0
-
-    def next_batch(self, bs):
-  
-        x_batch  = np.concatenate([self.pos_data_train[self.train_idx:self.train_idx+bs//2],
-                                   self.neg_data_train[self.train_idx:self.train_idx+bs//2]],axis=0)
-
-        if self.train_idx + bs >= self.num_neg_train:
-            self.train_idx = 0
-            np.random.shuffle(self.neg_data_train)
-            np.random.shuffle(self.pos_data_train)
-        else:
-            self.train_idx += bs//2
+    if len(seq_pos) != len(seq_neg):
+        raise('number of positive examples is not the same as the number of negative examples.')        
         
-        return x_batch, np.concatenate([np.ones([bs//2]), np.zeros([bs//2])])
         
-
-
+        
+    ### create TensorFlow examples
+    data = create_tf_examples(seq_pos, seq_neg, True) 
+    
+    return data
 
 
 
@@ -191,7 +235,7 @@ def circular_kernel(W, weight_indices):
 
 def cnn_with_circular_fiters(x, weights, weight_indices):
 
-    conv = transfer_function(tf.nn.conv2d(x, circular_kernel(weights['w_filter'],weight_indices), [1, 1, 1, 1], padding='VALID'))
+    conv = tf.nn.relu(tf.nn.conv2d(x, circular_kernel(weights['w_filter'],weight_indices), [1, 1, 1, 1], padding='VALID'))
     pool = tf.reduce_max(conv,reduction_indices = 2,keepdims=True) # None x 1 x 1 x num_filters
     act  = tf.reshape(pool,[-1,FLAGS.filter_length], name='reshape_pool1')
 
@@ -205,7 +249,7 @@ def cnn_with_circular_fiters(x, weights, weight_indices):
 
 def regular_cnn(x, weights):
     
-    conv = transfer_function(tf.nn.conv2d(x,  weights['w_filter'], [1, 1, 1, 1], padding='VALID'))
+    conv = tf.nn.relu(tf.nn.conv2d(x,  weights['w_filter'], [1, 1, 1, 1], padding='VALID'))
     pool = tf.reduce_max(conv,reduction_indices = 2,keepdims=True) 
     act  = tf.reshape(pool,[-1,1], name='reshape_pool1')
     
@@ -217,7 +261,6 @@ def regular_cnn(x, weights):
 
 
 
-
 # ------------------------------------------------------
 # Build graph and train the model based on "data".
 # Depending on the value of "use_circular_filters", 
@@ -225,18 +268,32 @@ def regular_cnn(x, weights):
 # ------------------------------------------------------
 
 
-def build_and_train(data, use_circular_filters):
+def build_and_train(train_data, use_circular_filters):
 
     g = tf.Graph()
     with g.as_default():
 
         
+
+        # ------------ set up session ------------
+        config = tf.ConfigProto()
+        config.allow_soft_placement     = True
+        config.gpu_options.allow_growth = True  
+        sess = tf.Session(config=config)
+        
+        
+        
+        
         # ------------ set up graph ------------
         # Define not trainable Network variables
-        x           = tf.placeholder(tf.float32, shape=[None,1,FLAGS.sequence_length,4]) # data
-        y           = tf.placeholder(tf.int64,   shape=[None])             # labels
+        num_examples   = train_data[1].get_shape().as_list()[0]
+        train_dataset  = tf.data.Dataset.from_tensor_slices(train_data).repeat().shuffle(buffer_size=num_examples*10).batch(batch_size=FLAGS.batch_size)
+        train_iterator = train_dataset.make_one_shot_iterator()
+        [x, y] = train_iterator.get_next()    
         
-
+        
+        
+        
         
         
         # ------------ set up network ------------
@@ -282,13 +339,8 @@ def build_and_train(data, use_circular_filters):
         
         
         
-        # ------------ set up session ------------
-        config = tf.ConfigProto()
-        config.allow_soft_placement     = True
-        config.gpu_options.allow_growth = True  
-
-        sess = tf.Session(config=config)
-        sess.run(init_op) # re-initialize all variables
+        # ------------ initialize variables ------------
+        sess.run(init_op)
 
 
 
@@ -299,8 +351,7 @@ def build_and_train(data, use_circular_filters):
         start_time = time.time()
         for step in range(FLAGS.training_steps):
 
-            [x_batch,y_batch] = data.next_batch(FLAGS.batch_size)
-            _,accuracy_np     = sess.run([train_op,accuracy], feed_dict={x:x_batch, y:y_batch})
+            _,accuracy_np     = sess.run([train_op,accuracy])
             acc_train_ema     = acc_train_ema*(1-emafactor) + accuracy_np*emafactor
             
             if (FLAGS.display_steps>0) and (step % FLAGS.display_steps==0):
@@ -331,16 +382,20 @@ def build_and_train(data, use_circular_filters):
 
 
 
+# ------------------------------------------------------
+# Main function
+# ------------------------------------------------------
+
 def main(argv):
 
 
 
     print('Creating data ...')
-    data = mydata(FLAGS.num_positive, FLAGS.num_negative, FLAGS.sequence_length, FLAGS.motif)
+    train_data = generate_data(FLAGS.num_positive, FLAGS.num_negative, FLAGS.sequence_length, FLAGS.motif)
     
     print('\n\n---------------------------------------------')
     print('Start training CNN with circular filters ... ')
-    inferred_motif = build_and_train(data, True)
+    inferred_motif = build_and_train(train_data, True)
     print('... training done.')
     print('Original motif: %s' % FLAGS.motif)
     print('Inferred motif: %s' % inferred_motif)
@@ -348,7 +403,7 @@ def main(argv):
     
     print('\n\n---------------------------------------------')
     print('Start training regular CNN ... ')
-    inferred_motif = build_and_train(data, False)
+    inferred_motif = build_and_train(train_data, False)
     print('... training done.')
     print('Original motif: %s' % FLAGS.motif)
     print('Inferred motif: %s' % inferred_motif)
@@ -358,4 +413,5 @@ def main(argv):
 
 if __name__ == '__main__':
     tf.app.run(main)
+
 
